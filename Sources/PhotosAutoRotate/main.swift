@@ -130,7 +130,7 @@ func run() async {
         let assets = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil)
         guard let a = assets.firstObject else { print("not found"); exit(1) }
         let own = await PhotoKitRotator().hasOwnAdjustment(assetID: id)
-        print("\(id): \(a.pixelWidth)x\(a.pixelHeight) hasAdjustments=\(a.hasAdjustments) ourAdjustment=\(own) modified=\(a.modificationDate.map { "\($0)" } ?? "-")")
+        print("\(id): subtypes=\(a.mediaSubtypes.rawValue) burst=\(a.burstIdentifier ?? "-") src=\(a.sourceType.rawValue) canEdit=\(a.canPerform(.content)) \(a.pixelWidth)x\(a.pixelHeight) hasAdjustments=\(a.hasAdjustments) ourAdjustment=\(own) modified=\(a.modificationDate.map { "\($0)" } ?? "-")")
 
     case "rotate":
         // Debug: force-rotate one asset (bypasses classifier). Ledgered, revertible.

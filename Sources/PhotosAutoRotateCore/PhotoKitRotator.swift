@@ -57,22 +57,60 @@ public final class PhotoKitRotator {
     public func rotate(assetID: String, degrees: RotationDegrees, confidence: Double) async throws -> Bool {
         guard degrees != .none else { return false }
         let asset = try fetchAsset(assetID)
+        // Make sure the full-size original is really local before editing;
+        // an original that only arrived via the editing-input request can
+        // fail commit with PHPhotosError 3302 (library volume offline).
+        _ = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+            let o = PHImageRequestOptions(); o.isNetworkAccessAllowed = true; o.deliveryMode = .highQualityFormat; o.version = .original
+            PHImageManager.default().requestImageDataAndOrientation(for: asset, options: o) { d, _, _, _ in cont.resume(returning: d != nil) }
+        }
+        // Also pull every resource (e.g. sidecar/adjustment data) that
+        // PhotoKit needs before it will accept an edit; otherwise commit can
+        // fail with 3302 even though the original is local.
+        for res in PHAssetResource.assetResources(for: asset) {
+            let o = PHAssetResourceRequestOptions(); o.isNetworkAccessAllowed = true
+            _ = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+                PHAssetResourceManager.default().requestData(for: res, options: o, dataReceivedHandler: { _ in }) { err in
+                    if ProcessInfo.processInfo.environment["PAR_DEBUG"] != nil { FileHandle.standardError.write("resource \(res.type.rawValue) \(res.originalFilename): \(err.map { "\($0)" } ?? "ok")\n".data(using: .utf8)!) }
+                    cont.resume(returning: err == nil)
+                }
+            }
+        }
         let input = try await requestEditingInput(asset, canHandle: false)
         guard let sourceURL = input.fullSizeImageURL else { throw RotatorError.noEditingInput }
 
         let baseOrientation = CGImagePropertyOrientation(rawValue: UInt32(input.fullSizeImageOrientation)) ?? .up
         guard let ci = CIImage(contentsOf: sourceURL) else { throw RotatorError.noEditingInput }
-        var rotated = ci.oriented(baseOrientation)
-        let steps = degrees.rawValue / 90
-        for _ in 0..<steps {
-            rotated = rotated.oriented(.right)
+        // HDR gain-map photos (iPhone 12+ "ISO HDR"): Photos rejects a rendered
+        // edit that drops the gain map (PHPhotosError 3302), so rotate the gain
+        // map alongside the base image and write it back.
+        let gainMap = CIImage(contentsOf: sourceURL, options: [.auxiliaryHDRGainMap: true])
+        let steps = ProcessInfo.processInfo.environment["PAR_NOROT"] != nil ? 0 : degrees.rawValue / 90
+        func orient(_ img: CIImage) -> CIImage {
+            var out = img.oriented(baseOrientation)
+            for _ in 0..<steps { out = out.oriented(.right) }
+            return out
         }
+        let rotated = orient(ci)
+        let rotatedGain = gainMap.map(orient)
 
         let output = PHContentEditingOutput(contentEditingInput: input)
+        if ProcessInfo.processInfo.environment["PAR_DEBUG"] != nil {
+            FileHandle.standardError.write("gainMap=\(gainMap != nil) defaultRenderedContentType=\(String(describing: output.defaultRenderedContentType)) inputAdj=\(String(describing: input.adjustmentData?.formatIdentifier))\n".data(using: .utf8)!)
+        }
         let ctx = CIContext()
         guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else { throw RotatorError.noEditingInput }
-        try ctx.writeJPEGRepresentation(of: rotated, to: output.renderedContentURL, colorSpace: colorSpace,
-                                         options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.95])
+        var opts: [CIImageRepresentationOption: Any] = [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.95]
+        if let rotatedGain { opts[.hdrGainMapImage] = rotatedGain }
+        if ProcessInfo.processInfo.environment["PAR_IDENTITY"] != nil {
+            try FileManager.default.copyItem(at: sourceURL, to: output.renderedContentURL)   // experiment: identity edit
+        } else {
+            try ctx.writeJPEGRepresentation(of: rotated, to: output.renderedContentURL, colorSpace: colorSpace, options: opts)
+        }
+        if ProcessInfo.processInfo.environment["PAR_DEBUG"] != nil {
+            let sz = (try? FileManager.default.attributesOfItem(atPath: output.renderedContentURL.path)[.size]) ?? 0
+            FileHandle.standardError.write("src=\(sourceURL.path) orient=\(input.fullSizeImageOrientation) extent=\(rotated.extent) out=\(output.renderedContentURL.path) bytes=\(sz)\n".data(using: .utf8)!)
+        }
 
         let payload = AutoRotateAdjustment(degrees: degrees.rawValue, confidence: confidence, appliedAt: ISO8601DateFormatter().string(from: Date()))
         let data = try JSONEncoder().encode(payload)
@@ -80,12 +118,16 @@ public final class PhotoKitRotator {
                                                   formatVersion: AutoRotateAdjustment.formatVersion,
                                                   data: data)
 
+        if let w = ProcessInfo.processInfo.environment["PAR_WAIT"].flatMap(Double.init) { try? await Task.sleep(nanoseconds: UInt64(w * 1e9)) }
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             PHPhotoLibrary.shared().performChanges({
                 let req = PHAssetChangeRequest(for: asset)
                 req.contentEditingOutput = output
             }) { ok, err in
-                if ok { cont.resume() } else { cont.resume(throwing: RotatorError.commitFailed(err)) }
+                if ok { cont.resume() } else {
+                    if ProcessInfo.processInfo.environment["PAR_DEBUG"] != nil { FileHandle.standardError.write("commit error: \(String(describing: (err as NSError?)?.userInfo))\n".data(using: .utf8)!) }
+                    cont.resume(throwing: RotatorError.commitFailed(err))
+                }
             }
         }
         return true
