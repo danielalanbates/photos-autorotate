@@ -65,7 +65,8 @@ public final class LibraryScanner {
     /// Times out rather than hanging on a stalled iCloud fetch.
     public func requestClassificationImage(for asset: PHAsset, targetSize: CGFloat = 768,
                                            allowNetwork: Bool = true, timeoutSeconds: Double = 20) async -> CGImage? {
-        if let cg = await requestViaImageManager(asset, targetSize: targetSize, allowNetwork: allowNetwork, timeout: timeoutSeconds) {
+        if ProcessInfo.processInfo.environment["PAR_FORCE_DATA"] == nil,
+           let cg = await requestViaImageManager(asset, targetSize: targetSize, allowNetwork: allowNetwork, timeout: timeoutSeconds) {
             Self.dump(cg, name: "reqimg-\(asset.localIdentifier.prefix(8))")
             return cg
         }

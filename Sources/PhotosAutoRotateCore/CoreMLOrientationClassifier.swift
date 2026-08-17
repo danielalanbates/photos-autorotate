@@ -62,16 +62,23 @@ public final class CoreMLOrientationClassifier {
     /// image is ambiguous and we return nil (=> skip). Otherwise return a
     /// 4-vector whose winning entry is the MIN calibrated probability across
     /// the four views (the weakest link), the rest split evenly.
-    public func classifyConsensus(cgImage: CGImage) -> [Double]? {
+    public func classifyConsensus(cgImage: CGImage, useFlips: Bool = true) -> [Double]? {
         var aligned: Int? = nil
         var minP = 1.0
-        for k in 0..<4 {
-            guard let probs = classify(cgImage: cgImage, preRotateCWQuarterTurns: k), probs.count == 4 else { return nil }
-            let c = probs.indices.max { probs[$0] < probs[$1] }!
-            let r = (c + k) % 4
-            if let a = aligned, a != r { return nil }
-            aligned = r
-            minP = min(minP, min(1.0, probs[c] / Self.labelSmoothingCeiling))
+        for flip in (useFlips ? [false, true] : [false]) {
+            for k in 0..<4 {
+                guard let probs = classify(cgImage: cgImage, preRotateCWQuarterTurns: k, mirrored: flip), probs.count == 4 else { return nil }
+                let c = probs.indices.max { probs[$0] < probs[$1] }!
+                // View = mirror(rotate_k(image)) (CG applies the CTM ops set first
+                // last to the drawn content). rotate_k shifts the needed correction
+                // by -k; a horizontal mirror negates it (90<->270). So:
+                //   unflipped: c = r - k  => r = c + k
+                //   flipped:   c = k - r  => r = k - c
+                let r = flip ? ((k - c) % 4 + 4) % 4 : (c + k) % 4
+                if let a = aligned, a != r { return nil }
+                aligned = r
+                minP = min(minP, min(1.0, probs[c] / Self.labelSmoothingCeiling))
+            }
         }
         guard let r = aligned else { return nil }
         var out = [Double](repeating: (1 - minP) / 3, count: 4)
@@ -79,10 +86,10 @@ public final class CoreMLOrientationClassifier {
         return out
     }
 
-    public func classify(cgImage: CGImage, preRotateCWQuarterTurns k: Int) -> [Double]? {
+    public func classify(cgImage: CGImage, preRotateCWQuarterTurns k: Int, mirrored: Bool = false) -> [Double]? {
         guard let model else { return nil }
         let size = Self.imageSize
-        guard let pixelBuffer = Self.makePixelBuffer(from: cgImage, size: size, cwQuarterTurns: k) else { return nil }
+        guard let pixelBuffer = Self.makePixelBuffer(from: cgImage, size: size, cwQuarterTurns: k, mirrored: mirrored) else { return nil }
         guard let featureValue = try? MLFeatureValue(pixelBuffer: pixelBuffer) as MLFeatureValue? else { return nil }
         guard let provider = try? MLDictionaryFeatureProvider(dictionary: [inputName: featureValue]) else { return nil }
         guard let result = try? model.prediction(from: provider) else { return nil }
@@ -92,7 +99,7 @@ public final class CoreMLOrientationClassifier {
         return probs
     }
 
-    private static func makePixelBuffer(from cgImage: CGImage, size: Int, cwQuarterTurns k: Int = 0) -> CVPixelBuffer? {
+    private static func makePixelBuffer(from cgImage: CGImage, size: Int, cwQuarterTurns k: Int = 0, mirrored: Bool = false) -> CVPixelBuffer? {
         var pixelBuffer: CVPixelBuffer?
         let attrs: [CFString: Any] = [kCVPixelBufferCGImageCompatibilityKey: true,
                                        kCVPixelBufferCGBitmapContextCompatibilityKey: true]
@@ -111,6 +118,11 @@ public final class CoreMLOrientationClassifier {
         let scaledW = srcW * scale, scaledH = srcH * scale
         let x = (CGFloat(size) - scaledW) / 2, y = (CGFloat(size) - scaledH) / 2
         context.interpolationQuality = .high
+        if mirrored {
+            // Horizontal flip about the canvas center (applied before rotation).
+            context.translateBy(x: CGFloat(size), y: 0)
+            context.scaleBy(x: -1, y: 1)
+        }
         if k % 4 != 0 {
             // CG's coordinate space is y-up; rotating by -k*90° in that space
             // yields a k*90° clockwise rotation as seen on screen.

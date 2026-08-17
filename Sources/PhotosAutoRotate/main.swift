@@ -123,6 +123,26 @@ func run() async {
             }
         }
 
+    case "status":
+        // Debug: PhotoKit's view of an asset (adjustments, size, our ledger flag).
+        guard await PhotoKitRotator.requestAuthorization() else { print("ERROR: not authorized."); exit(1) }
+        guard let id = options["_positional"] else { print("Usage: photos-autorotate status <asset-local-identifier>"); exit(1) }
+        let assets = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil)
+        guard let a = assets.firstObject else { print("not found"); exit(1) }
+        let own = await PhotoKitRotator().hasOwnAdjustment(assetID: id)
+        print("\(id): \(a.pixelWidth)x\(a.pixelHeight) hasAdjustments=\(a.hasAdjustments) ourAdjustment=\(own) modified=\(a.modificationDate.map { "\($0)" } ?? "-")")
+
+    case "rotate":
+        // Debug: force-rotate one asset (bypasses classifier). Ledgered, revertible.
+        guard await PhotoKitRotator.requestAuthorization() else { print("ERROR: not authorized."); exit(1) }
+        let parts = (options["_positional"] ?? "").split(separator: " ").map(String.init)
+        guard parts.count == 2, let deg = Int(parts[1]), let rot = RotationDegrees(rawValue: deg) else { print("Usage: photos-autorotate rotate <id> <90|180|270>"); exit(1) }
+        do {
+            _ = try await PhotoKitRotator().rotate(assetID: parts[0], degrees: rot, confidence: 0)
+            ledger.append(LedgerEntry(assetLocalIdentifier: parts[0], degrees: deg, confidence: 0, appliedAt: ISO8601DateFormatter().string(from: Date())))
+            print("rotated \(parts[0]) by \(deg)°")
+        } catch { print("ERROR: \(error)"); exit(1) }
+
     case "scan":
         guard await PhotoKitRotator.requestAuthorization() else {
             print("ERROR: Photos access not authorized. Grant access in System Settings > Privacy & Security > Photos.")
