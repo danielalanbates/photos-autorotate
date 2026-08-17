@@ -260,6 +260,18 @@ func run() async {
         print(String(format: "recall (needed fixes made) = %.4f", (missed + correct + wrong) > 0 ? Double(correct)/Double(missed + correct + wrong) : 0))
         for w in wrongList { print("  WRONG: \(w)") }
 
+    case "dump":
+        // Debug: dump display-oriented images for asset ids to --out.
+        guard await PhotoKitRotator.requestAuthorization() else { exit(1) }
+        let out = URL(fileURLWithPath: options["out"] ?? ".")
+        try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let sc = LibraryScanner()
+        for id in args.dropFirst().filter({ !$0.hasPrefix("--") && $0 != options["out"] }) {
+            guard let a = PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject,
+                  let cg = await sc.requestClassificationImage(for: a, targetSize: 1024) else { print("fail \(id)"); continue }
+            writeJPEG(cg, to: out.appendingPathComponent(String(id.prefix(8)) + ".jpg")); print("ok \(id.prefix(8))")
+        }
+
     case "scan":
         guard await PhotoKitRotator.requestAuthorization() else {
             print("ERROR: Photos access not authorized. Grant access in System Settings > Privacy & Security > Photos.")

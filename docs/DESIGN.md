@@ -46,6 +46,10 @@ random known rotation; `apply --album ...` runs the real pipeline;
 Run 2 (seed 99, HDR/portrait assets included after the 3302 fix): n=100,
 acted 65, correct 65, wrong 0, 11 skipped. PASS. Skipped leftovers were
 reverted to original afterwards.
+Run 3 (seed 2024, Vision veto disabled): n=100, acted 57, correct 57, wrong 0,
+14 skipped (recall 0.80). PASS. Cumulative: 181/181 actions correct.
+Vision face/text veto was found to veto CORRECT 0.99+ model calls with wrong
+answers (0.7-0.9 conf) -> disabled by default (DecisionEngine).
 
 ## SOLVED: PHPhotosError 3302 on portrait/HDR photos
 Third-party edits on any asset whose original carries EXIF Orientation != 1

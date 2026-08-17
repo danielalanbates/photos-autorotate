@@ -22,10 +22,13 @@ public final class DecisionEngine {
     ///     model (default 0.99 -- matches the "never rotate unless 99%
     ///     confident" requirement).
     /// Vision only gets to veto CoreML when its own share-of-score is at least
-    /// this; below it the heuristic is a coin flip (e.g. rotated text reads both ways).
+    /// this. Default 1.01 = DISABLED: on the live album bench the face/text
+    /// heuristic vetoed correct 0.99+ model calls with wrong answers at 0.7-0.9
+    /// confidence, and the 900-trial offline bench had 0 errors with no veto.
+    /// Kept as an option for experimentation.
     public let minVisionVetoConfidence: Double
 
-    public init(minCoreMLConfidence: Double = 0.99, minVisionVetoConfidence: Double = 0.6) {
+    public init(minCoreMLConfidence: Double = 0.99, minVisionVetoConfidence: Double = 1.01) {
         self.minVisionVetoConfidence = minVisionVetoConfidence
         self.minCoreMLConfidence = minCoreMLConfidence
     }
