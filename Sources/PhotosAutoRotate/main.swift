@@ -200,7 +200,12 @@ func run() async {
         guard let album = LibraryScanner.album(named: albumName) else { print("ERROR: album \(albumName) not found"); exit(1) }
         // 1. clear
         let existing = PHAsset.fetchAssets(in: album, options: nil)
-        if existing.count > 0 {
+        let append = flags.contains("append")
+        var truth: [String: [String: Any]] = [:]
+        let truthURL = AppPaths.supportDirectory.appendingPathComponent("bench-truth.json")
+        if append, let d = try? Data(contentsOf: truthURL), let t = (try? JSONSerialization.jsonObject(with: d)) as? [String: [String: Any]] { truth = t }
+        var already = Set<String>(); if append { existing.enumerateObjects { a, _, _ in already.insert(a.localIdentifier) } }
+        if existing.count > 0 && !append {
             try? await PHPhotoLibrary.shared().performChanges { PHAssetCollectionChangeRequest(for: album)?.removeAssets(existing) }
             print("Cleared \(existing.count) asset(s) from \"\(albumName)\".")
         }
@@ -214,9 +219,8 @@ func run() async {
         print("\(pool.count) editable candidates; looking for \(n) with people/animals/buildings...")
         let rotator = PhotoKitRotator()
         var picked: [(PHAsset, Int, String)] = []
-        var truth: [String: [String: Any]] = [:]
-        for a in pool {
-            if picked.count >= n { break }
+        for a in pool where !already.contains(a.localIdentifier) {
+            if picked.count + already.count >= n { break }
             guard let cg = await scanner.requestClassificationImage(for: a) else { continue }
             guard let why = subjectTag(cg) else { continue }
             let deg = [0, 90, 180, 270].randomElement(using: &rng)!
@@ -227,12 +231,11 @@ func run() async {
             }
             picked.append((a, deg, why))
             truth[a.localIdentifier] = ["scrambledCW": deg, "subject": why]
-            print("  [\(picked.count)/\(n)] \(a.localIdentifier.prefix(8)) \(why) scrambled \(deg)°")
+            print("  [\(picked.count + already.count)/\(n)] \(a.localIdentifier.prefix(8)) \(why) scrambled \(deg)°"); fflush(stdout)
         }
         try? await PHPhotoLibrary.shared().performChanges { PHAssetCollectionChangeRequest(for: album)?.addAssets(picked.map { $0.0 } as NSFastEnumeration) }
-        let truthURL = AppPaths.supportDirectory.appendingPathComponent("bench-truth.json")
         try? JSONSerialization.data(withJSONObject: truth, options: [.prettyPrinted, .sortedKeys]).write(to: truthURL)
-        print("Album \"\(albumName)\": \(picked.count) photos, truth at \(truthURL.path)")
+        print("Album \"\(albumName)\": +\(picked.count) photos (\(truth.count) total), truth at \(truthURL.path)")
 
     case "bench-score":
         // Compares net rotation we applied to each bench asset against the
@@ -450,12 +453,12 @@ func subjectTag(_ cg: CGImage) -> String? {
     let scene = VNClassifyImageRequest()
     let h = VNImageRequestHandler(cgImage: cg, options: [:])
     try? h.perform([faces, humans, animals, scene])
-    if let f = faces.results, f.contains(where: { $0.confidence > 0.9 }) { return "face" }
-    if let hu = humans.results, hu.contains(where: { $0.confidence > 0.9 }) { return "person" }
-    if let an = animals.results, an.contains(where: { $0.confidence > 0.8 }) { return "animal" }
-    let buildingWords = ["building", "house", "church", "skyscraper", "castle", "architecture", "tower", "bridge", "cityscape", "street", "temple", "cathedral", "barn", "lighthouse", "stadium"]
+    if let f = faces.results, f.contains(where: { $0.confidence > 0.5 && $0.boundingBox.width > 0.05 }) { return "face" }
+    if let hu = humans.results, hu.contains(where: { $0.confidence > 0.7 }) { return "person" }
+    if let an = animals.results, an.contains(where: { $0.confidence > 0.6 }) { return "animal" }
+    let buildingWords = ["building", "house", "church", "skyscraper", "castle", "architecture", "tower", "bridge", "cityscape", "street", "temple", "cathedral", "barn", "lighthouse", "stadium", "people", "person", "child", "kid", "baby", "dog", "cat", "horse", "bird", "cow", "sheep", "landscape", "beach", "mountain", "city", "room", "kitchen"]
     if let obs = scene.results {
-        for o in obs where o.confidence > 0.6 {
+        for o in obs where o.confidence > 0.5 {
             if buildingWords.contains(where: { o.identifier.lowercased().contains($0) }) { return "building:" + o.identifier }
         }
     }

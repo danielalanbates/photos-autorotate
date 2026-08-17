@@ -37,6 +37,13 @@ Bench excludes the Vision veto (real pipeline is stricter).
 Full library dry-run (320 photos): 1 flagged — that same tattoo photo,
 before the mirror views were added; 0 after.
 
+## Live album bench (Daniel's pass/fail metric)
+`bench-setup --album "AutoRotate Review" --n 100 [--append]` picks editable
+people/animal/building photos, adds them to the album, scrambles each by a
+random known rotation; `apply --album ...` runs the real pipeline;
+`bench-score` compares. 2026-08-17: n=100, acted 59, correct 59, wrong 0
+(precision 1.000), 10 skipped-but-needed (recall 0.855). PASS.
+
 ## OPEN: HDR gain-map photos can't be edited via PhotoKit (3302)
 Assets with ZHDRTYPE=10 / undocumented mediaSubtypes bit 1<<9 (~3,200 of
 Daniel's 17k photos, iPhone "ISO HDR" JPEG/HEIC) fail `performChanges` with
