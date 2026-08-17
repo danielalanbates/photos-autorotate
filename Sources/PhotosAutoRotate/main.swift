@@ -143,6 +143,50 @@ func run() async {
             print("rotated \(parts[0]) by \(deg)°")
         } catch { print("ERROR: \(error)"); exit(1) }
 
+    case "review-album":
+        // Builds a Photos album (default "AutoRotate Review") containing the assets the
+        // latest scan report would rotate -- assets are NOT modified -- and writes
+        // before/after JPEG previews to --out (default ~/Downloads/AutoRotate-Review).
+        guard await PhotoKitRotator.requestAuthorization() else { print("ERROR: not authorized."); exit(1) }
+        let albumName = options["album"] ?? "AutoRotate Review"
+        let outDir = URL(fileURLWithPath: options["out"] ?? (NSHomeDirectory() + "/Downloads/AutoRotate-Review"))
+        let reportsDir = AppPaths.reportsDirectory
+        let reports = ((try? FileManager.default.contentsOfDirectory(atPath: reportsDir.path)) ?? []).filter { $0.hasPrefix("scan-") && $0.hasSuffix(".json") }.sorted()
+        guard let latest = reports.last, let data = try? Data(contentsOf: reportsDir.appendingPathComponent(latest)),
+              let report = try? JSONDecoder().decode(ScanReport.self, from: data) else { print("ERROR: no scan report found; run scan first."); exit(1) }
+        let minConf = options["min-confidence"].flatMap(Double.init) ?? 0.99
+        let picks = report.classified.filter { $0.bestRotation != .none && $0.confidence >= minConf }
+        print("Report \(latest): \(picks.count) asset(s) would be rotated at >= \(minConf).")
+        guard !picks.isEmpty else { print("Nothing to show."); break }
+        let ids = picks.map { $0.assetLocalIdentifier }
+        let assets = PHAsset.fetchAssets(withLocalIdentifiers: ids, options: nil)
+        var list: [PHAsset] = []; assets.enumerateObjects { a, _, _ in list.append(a) }
+        // Album: reuse if it exists, else create.
+        var album = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .albumRegular, options: nil).objects(at: IndexSet(integersIn: 0..<PHAssetCollection.fetchAssetCollections(with: .album, subtype: .albumRegular, options: nil).count)).first { $0.localizedTitle == albumName }
+        do {
+            if album == nil {
+                var placeholder: PHObjectPlaceholder?
+                try await PHPhotoLibrary.shared().performChanges { placeholder = PHAssetCollectionChangeRequest.creationRequestForAssetCollection(withTitle: albumName).placeholderForCreatedAssetCollection }
+                if let id = placeholder?.localIdentifier { album = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [id], options: nil).firstObject }
+            }
+            guard let album else { print("ERROR: could not create album"); exit(1) }
+            try await PHPhotoLibrary.shared().performChanges { PHAssetCollectionChangeRequest(for: album)?.addAssets(list as NSFastEnumeration) }
+            print("Album \"\(albumName)\": added \(list.count) asset(s). Library assets untouched.")
+        } catch { print("ERROR: \(error)"); exit(1) }
+        // Before/after previews.
+        try? FileManager.default.createDirectory(at: outDir, withIntermediateDirectories: true)
+        let scanner = LibraryScanner()
+        var idx = 0
+        for a in list {
+            idx += 1
+            guard let cg = await scanner.requestClassificationImage(for: a, targetSize: 1024) else { continue }
+            let r = picks.first { $0.assetLocalIdentifier == a.localIdentifier }!
+            let name = String(format: "%03d_%@_rot%d_conf%.4f", idx, String(a.localIdentifier.prefix(8)), r.bestRotation.rawValue, r.confidence)
+            writeJPEG(cg, to: outDir.appendingPathComponent(name + "_before.jpg"))
+            if let rot = rotateCGImage(cg, cwDegrees: r.bestRotation.rawValue) { writeJPEG(rot, to: outDir.appendingPathComponent(name + "_after.jpg")) }
+        }
+        print("Previews: \(outDir.path)")
+
     case "scan":
         guard await PhotoKitRotator.requestAuthorization() else {
             print("ERROR: Photos access not authorized. Grant access in System Settings > Privacy & Security > Photos.")
@@ -301,3 +345,20 @@ func runApply(limit: Int?, minConfidence: Double, modelURL: URL, ledger: Ledger,
 }
 
 await run()
+
+
+func writeJPEG(_ cg: CGImage, to url: URL) {
+    guard let d = CGImageDestinationCreateWithURL(url as CFURL, "public.jpeg" as CFString, 1, nil) else { return }
+    CGImageDestinationAddImage(d, cg, [kCGImageDestinationLossyCompressionQuality: 0.9] as CFDictionary); CGImageDestinationFinalize(d)
+}
+
+func rotateCGImage(_ cg: CGImage, cwDegrees: Int) -> CGImage? {
+    let k = ((cwDegrees / 90) % 4 + 4) % 4
+    let (w, h) = k % 2 == 0 ? (cg.width, cg.height) : (cg.height, cg.width)
+    guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+                              space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue) else { return nil }
+    ctx.translateBy(x: CGFloat(w) / 2, y: CGFloat(h) / 2)
+    ctx.rotate(by: -CGFloat(k) * .pi / 2)
+    ctx.draw(cg, in: CGRect(x: -CGFloat(cg.width) / 2, y: -CGFloat(cg.height) / 2, width: CGFloat(cg.width), height: CGFloat(cg.height)))
+    return ctx.makeImage()
+}
