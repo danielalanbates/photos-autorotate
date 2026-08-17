@@ -43,6 +43,9 @@ people/animal/building photos, adds them to the album, scrambles each by a
 random known rotation; `apply --album ...` runs the real pipeline;
 `bench-score` compares. 2026-08-17: n=100, acted 59, correct 59, wrong 0
 (precision 1.000), 10 skipped-but-needed (recall 0.855). PASS.
+Run 2 (seed 99, HDR/portrait assets included after the 3302 fix): n=100,
+acted 65, correct 65, wrong 0, 11 skipped. PASS. Skipped leftovers were
+reverted to original afterwards.
 
 ## SOLVED: PHPhotosError 3302 on portrait/HDR photos
 Third-party edits on any asset whose original carries EXIF Orientation != 1

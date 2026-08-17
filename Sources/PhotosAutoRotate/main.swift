@@ -212,7 +212,7 @@ func run() async {
         // 2. candidates
         let scanner = LibraryScanner()
         var pool = scanner.fetchEligibleAssets().filter { a in
-            a.sourceType == .typeUserLibrary && !a.hasAdjustments && !LibraryScanner.isHDRGainMap(a)
+            a.sourceType == .typeUserLibrary && !a.hasAdjustments
                 && !a.mediaSubtypes.contains(.photoDepthEffect) && a.pixelWidth >= 800 && a.pixelHeight >= 800
         }
         pool.shuffle(using: &rng)
