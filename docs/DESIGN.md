@@ -37,6 +37,19 @@ Bench excludes the Vision veto (real pipeline is stricter).
 Full library dry-run (320 photos): 1 flagged — that same tattoo photo,
 before the mirror views were added; 0 after.
 
+## Why recall is ~80-85% and cannot be raised by the threshold
+1,600 offline trials (libdump x 5 seeds, `bench_precision.py --threshold 0.9`),
+binned by calibrated 8-view consensus confidence:
+  >=0.99: 1213 acted, 0 wrong (1.0000)
+  0.98:     72 acted, 2 wrong (0.972)   <- errors begin immediately below the gate
+  0.97:     26 acted, 3 wrong
+Cumulative precision at a 0.98 gate = 0.9984, at 0.97 = 0.9962 -- both fail
+the per-photo "99% positive" standard even though the aggregate looks fine.
+The remaining misoriented photos are ones the model is genuinely unsure
+about; fixing them needs a second, independent model (ensemble), not a
+looser gate. Vision face/text heuristic tried as that second signal: worse
+than useless (vetoes correct calls) -> disabled.
+
 ## Live album bench (Daniel's pass/fail metric)
 `bench-setup --album "AutoRotate Review" --n 100 [--append]` picks editable
 people/animal/building photos, adds them to the album, scrambles each by a

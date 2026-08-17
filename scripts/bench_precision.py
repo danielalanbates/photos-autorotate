@@ -40,12 +40,14 @@ for i, f in enumerate(files):
 res = subprocess.run([str(BIN), "classify-file", "--model", str(MODEL), *truth.keys()],
                      capture_output=True, text=True).stdout
 acted = correct = wrong = 0; wrong_list = []
+bands = {}   # conf band -> [n, correct]
 cur = None
 for line in res.splitlines():
     if line.startswith(str(work)): cur = line.strip(); continue
     m = re.match(r"\s+consensus: rotate (\d+)° CW, calibrated confidence ([\d.]+)", line)
     if m and cur:
         pred, conf = int(m.group(1)), float(m.group(2))
+        b = min(int(conf * 100), 99); bands.setdefault(b, [0, 0]); bands[b][0] += 1; bands[b][1] += (pred == truth[cur])
         if conf >= a.threshold:
             acted += 1
             if pred == truth[cur]: correct += 1
@@ -54,4 +56,5 @@ n = len(truth)
 print(f"n={n} acted={acted} correct={correct} wrong={wrong}")
 print(f"precision={correct/acted if acted else float('nan'):.4f}  recall={correct/n:.4f}  skipped={n-acted}")
 for w in wrong_list: print("  WRONG:", w)
+for b in sorted(bands, reverse=True): print(f"  band {b/100:.2f}-{(b+1)/100:.2f}: n={bands[b][0]} correct={bands[b][1]}")
 print("workdir:", work)
