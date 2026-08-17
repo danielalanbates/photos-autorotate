@@ -19,8 +19,13 @@ public final class CoreMLOrientationClassifier {
     private let inputName: String
     private let outputName: String
     public static let imageSize = 384
+    public let imageSize: Int
+    public let calibrationCeiling: Double
+    /// classToCW[c] = CW degrees/90 to correct when the model outputs class c.
+    public let classToCW: [Int]
 
-    public init(modelURL: URL?) {
+    public init(modelURL: URL?, imageSize: Int = 384, calibrationCeiling: Double = 0.925, classToCW: [Int] = [0, 1, 2, 3]) {
+        self.imageSize = imageSize; self.calibrationCeiling = calibrationCeiling; self.classToCW = classToCW
         guard let modelURL, FileManager.default.fileExists(atPath: modelURL.path) else {
             self.model = nil
             self.inputName = ""
@@ -68,7 +73,8 @@ public final class CoreMLOrientationClassifier {
         for flip in (useFlips ? [false, true] : [false]) {
             for k in 0..<4 {
                 guard let probs = classify(cgImage: cgImage, preRotateCWQuarterTurns: k, mirrored: flip), probs.count == 4 else { return nil }
-                let c = probs.indices.max { probs[$0] < probs[$1] }!
+                let cRaw = probs.indices.max { probs[$0] < probs[$1] }!
+                let c = classToCW[cRaw]
                 // View = mirror(rotate_k(image)) (CG applies the CTM ops set first
                 // last to the drawn content). rotate_k shifts the needed correction
                 // by -k; a horizontal mirror negates it (90<->270). So:
@@ -77,7 +83,7 @@ public final class CoreMLOrientationClassifier {
                 let r = flip ? ((k - c) % 4 + 4) % 4 : (c + k) % 4
                 if let a = aligned, a != r { return nil }
                 aligned = r
-                minP = min(minP, min(1.0, probs[c] / Self.labelSmoothingCeiling))
+                minP = min(minP, min(1.0, probs[cRaw] / calibrationCeiling))
             }
         }
         guard let r = aligned else { return nil }
@@ -88,7 +94,7 @@ public final class CoreMLOrientationClassifier {
 
     public func classify(cgImage: CGImage, preRotateCWQuarterTurns k: Int, mirrored: Bool = false) -> [Double]? {
         guard let model else { return nil }
-        let size = Self.imageSize
+        let size = imageSize
         guard let pixelBuffer = Self.makePixelBuffer(from: cgImage, size: size, cwQuarterTurns: k, mirrored: mirrored) else { return nil }
         guard let featureValue = try? MLFeatureValue(pixelBuffer: pixelBuffer) as MLFeatureValue? else { return nil }
         guard let provider = try? MLDictionaryFeatureProvider(dictionary: [inputName: featureValue]) else { return nil }

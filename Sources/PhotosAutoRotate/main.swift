@@ -110,6 +110,13 @@ func run() async {
             let (vs, sig) = vis.classify(cgImage: cg)
             let vg = vis.bestGuess(from: vs)
             print("  vision: rotate \(vg.rotation.rawValue)° conf \(String(format: "%.2f", vg.confidence)) signals=\(sig) scores=\(vs.map { "\($0.rotation.rawValue):\(String(format: "%.1f", $0.score))" })")
+            if let bURL = options["model-b"].map({ URL(fileURLWithPath: $0) }) {
+                let b = CoreMLOrientationClassifier(modelURL: bURL, imageSize: 224, calibrationCeiling: 1.0, classToCW: (options["b-map"] ?? "0,1,2,3").split(separator: ",").map { Int($0)! })
+                var bv: [String] = []
+                for k in 0..<4 { let p = b.classify(cgImage: cg, preRotateCWQuarterTurns: k) ?? []; let c = p.indices.max { p[$0] < p[$1] } ?? -1; bv.append("B+\(k*90)→raw \(c) (\(String(format: "%.3f", c >= 0 ? p[c] : 0)))") }
+                if let cons = b.classifyConsensus(cgImage: cg) { let c = cons.indices.max { cons[$0] < cons[$1] }!; print("  B consensus: rotate \(c*90)° CW conf \(String(format: "%.4f", cons[c]))") } else { print("  B consensus: NONE") }
+                print("  " + bv.joined(separator: "; "))
+            }
             var views: [String] = []
             for k in 0..<4 {
                 let p = clf.classify(cgImage: cg, preRotateCWQuarterTurns: k) ?? []
@@ -333,6 +340,9 @@ func classifyLibrary(limit: Int?, modelURL: URL, album: PHAssetCollection? = nil
     let scanner = LibraryScanner()
     let visionClassifier = VisionOrientationClassifier()
     let coreMLClassifier = CoreMLOrientationClassifier(modelURL: modelURL)
+    let modelBURL = modelURL.deletingLastPathComponent().appendingPathComponent("OrientationClassifierB.mlpackage")
+    let modelB = CoreMLOrientationClassifier(modelURL: modelBURL, imageSize: 224, calibrationCeiling: 1.0)
+    if !modelB.isAvailable { print("NOTE: second model not found at \(modelBURL.path); running single-model (lower recall).") }
     let engine = DecisionEngine()
 
     if !coreMLClassifier.isAvailable {
@@ -355,8 +365,9 @@ func classifyLibrary(limit: Int?, modelURL: URL, album: PHAssetCollection? = nil
             continue
         }
         let coreMLProbs = coreMLClassifier.classifyConsensus(cgImage: cgImage)
+        let bProbs = modelB.isAvailable ? modelB.classifyConsensus(cgImage: cgImage) : nil
         let (visionScores, signals) = visionClassifier.classify(cgImage: cgImage)
-        let decision = engine.decide(coreMLProbs: coreMLProbs, visionScores: visionScores, visionClassifier: visionClassifier)
+        let decision = engine.decide(coreMLProbs: coreMLProbs, modelBProbs: bProbs, visionScores: visionScores, visionClassifier: visionClassifier)
 
         results.append(ClassificationResult(
             assetLocalIdentifier: asset.localIdentifier,

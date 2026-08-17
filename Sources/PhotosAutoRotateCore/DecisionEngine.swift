@@ -35,7 +35,30 @@ public final class DecisionEngine {
 
     private static let classToRotation: [RotationDegrees] = [.none, .cw90, .cw180, .cw270]
 
-    public func decide(coreMLProbs: [Double]?, visionScores: [OrientationScore]?, visionClassifier: VisionOrientationClassifier) -> (rotation: RotationDegrees, confidence: Double, reason: String) {
+    /// Ensemble with an independent second model (B). Thresholds come from a
+    /// 1,600-trial offline sweep (docs/DESIGN.md): A>=0.99 alone was 1213/0
+    /// wrong; adding "A>=0.75 & B agrees >=0.85" and "A no-consensus & B>=0.95"
+    /// took acted 1213->1319 with still 0 wrong (recall 0.75->0.83). The only
+    /// wrong agreement seen was A=0.44/B=0.62, far below these floors.
+    public var minAForEnsemble = 0.75, minBForEnsemble = 0.85, minBAlone = 0.95
+
+    public func decide(coreMLProbs: [Double]?, modelBProbs: [Double]? = nil, visionScores: [OrientationScore]?, visionClassifier: VisionOrientationClassifier) -> (rotation: RotationDegrees, confidence: Double, reason: String) {
+        if let modelBProbs, modelBProbs.count == 4 {
+            let bIdx = modelBProbs.indices.max(by: { modelBProbs[$0] < modelBProbs[$1] })!
+            let bConf = modelBProbs[bIdx]
+            if let a = coreMLProbs, a.count == 4 {
+                let aIdx = a.indices.max(by: { a[$0] < a[$1] })!
+                if a[aIdx] < minCoreMLConfidence, a[aIdx] >= minAForEnsemble, aIdx == bIdx, bConf >= minBForEnsemble {
+                    return (Self.classToRotation[aIdx], min(a[aIdx], bConf), "ensemble: model A \(String(format: "%.3f", a[aIdx])) and independent model B \(String(format: "%.3f", bConf)) agree")
+                }
+            } else if bConf >= minBAlone {
+                return (Self.classToRotation[bIdx], bConf, "ensemble: model A had no consensus, model B \(String(format: "%.3f", bConf))")
+            }
+        }
+        return decideA(coreMLProbs: coreMLProbs, visionScores: visionScores, visionClassifier: visionClassifier)
+    }
+
+    private func decideA(coreMLProbs: [Double]?, visionScores: [OrientationScore]?, visionClassifier: VisionOrientationClassifier) -> (rotation: RotationDegrees, confidence: Double, reason: String) {
         let vision = visionScores.map { visionClassifier.bestGuess(from: $0) }
 
         // No CoreML answer => never act. This covers both "model not loaded"
