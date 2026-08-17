@@ -37,6 +37,17 @@ Bench excludes the Vision veto (real pipeline is stricter).
 Full library dry-run (320 photos): 1 flagged — that same tattoo photo,
 before the mirror views were added; 0 after.
 
+## OPEN: HDR gain-map photos can't be edited via PhotoKit (3302)
+Assets with ZHDRTYPE=10 / undocumented mediaSubtypes bit 1<<9 (~3,200 of
+Daniel's 17k photos, iPhone "ISO HDR" JPEG/HEIC) fail `performChanges` with
+PHPhotosError 3302 "asset resource validation failed" for ANY third-party
+contentEditingOutput -- identity copy, JPEG, HEIC, with or without the gain
+map carried (`.auxiliaryHDRGainMap` -> `.hdrGainMapImage`), bundled or not,
+original local or not. Non-HDR assets (cloud-only originals included) commit
+fine. Photos.app's own Image > Rotate works on them (and drops their type-14
+v3 internal resource). `apply` reports these as FAILED; no workaround yet
+that doesn't involve driving Photos.app.
+
 ## Gotchas
 * `MLModel(contentsOf:)` needs .mlmodelc — we compile the .mlpackage at
   runtime and cache next to it (no Xcode coremlcompiler on this Mac).

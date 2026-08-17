@@ -1,3 +1,4 @@
+import UniformTypeIdentifiers
 import Foundation
 import Photos
 import CoreImage
@@ -104,6 +105,10 @@ public final class PhotoKitRotator {
         if let rotatedGain { opts[.hdrGainMapImage] = rotatedGain }
         if ProcessInfo.processInfo.environment["PAR_IDENTITY"] != nil {
             try FileManager.default.copyItem(at: sourceURL, to: output.renderedContentURL)   // experiment: identity edit
+        } else if ProcessInfo.processInfo.environment["PAR_HEIC"] != nil, let heic = UTType.heic as UTType?, output.supportedRenderedContentTypes.contains(heic) {
+            let url = try output.renderedContentURL(for: heic)
+            try ctx.writeHEIFRepresentation(of: rotated, to: url, format: .RGBA8, colorSpace: colorSpace, options: opts)
+            FileHandle.standardError.write("wrote HEIC to \(url.path)\n".data(using: .utf8)!)
         } else {
             try ctx.writeJPEGRepresentation(of: rotated, to: output.renderedContentURL, colorSpace: colorSpace, options: opts)
         }

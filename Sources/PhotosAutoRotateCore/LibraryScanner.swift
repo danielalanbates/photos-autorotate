@@ -32,11 +32,24 @@ func withTimeout<T>(_ seconds: Double, _ body: (Once<T>) -> Void) async -> T? {
 public final class LibraryScanner {
     public init() {}
 
-    public func fetchEligibleAssets(limit: Int? = nil) -> [PHAsset] {
+    /// Undocumented PHAssetMediaSubtype bit set on ISO-HDR (gain map) photos.
+    /// PhotoKit rejects third-party edits on these with PHPhotosError 3302
+    /// (see docs/DESIGN.md), so `apply` reports them as unsupported.
+    public static let hdrGainMapSubtypeBit: UInt = 1 << 9
+    public static func isHDRGainMap(_ a: PHAsset) -> Bool { a.mediaSubtypes.rawValue & hdrGainMapSubtypeBit != 0 }
+
+    public static func album(named name: String) -> PHAssetCollection? {
+        let cols = PHAssetCollection.fetchAssetCollections(with: .album, subtype: .albumRegular, options: nil)
+        var found: PHAssetCollection?
+        cols.enumerateObjects { c, _, stop in if c.localizedTitle == name { found = c; stop.pointee = true } }
+        return found
+    }
+
+    public func fetchEligibleAssets(limit: Int? = nil, inAlbum album: PHAssetCollection? = nil) -> [PHAsset] {
         let options = PHFetchOptions()
         options.predicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
-        let result = PHAsset.fetchAssets(with: options)
+        let result = album.map { PHAsset.fetchAssets(in: $0, options: options) } ?? PHAsset.fetchAssets(with: options)
         var assets: [PHAsset] = []
         result.enumerateObjects { asset, _, stop in
             // Skip Live Photos (rotating just the still would desync the video component)

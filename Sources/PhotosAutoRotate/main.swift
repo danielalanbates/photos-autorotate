@@ -1,5 +1,6 @@
 import Foundation
 import Photos
+import Vision
 import PhotosAutoRotateCore
 
 func printHelp() {
@@ -187,6 +188,75 @@ func run() async {
         }
         print("Previews: \(outDir.path)")
 
+    case "bench-setup":
+        // Clears --album, picks --n photos that contain people/animals/buildings
+        // (Vision), are editable (user library, no adjustments, not HDR gain-map,
+        // not Live), adds them to the album, applies a random known rotation to
+        // each (ledgered, revertible) and saves the truth table.
+        guard await PhotoKitRotator.requestAuthorization() else { print("ERROR: not authorized."); exit(1) }
+        let albumName = options["album"] ?? "AutoRotate Review"
+        let n = options["n"].flatMap(Int.init) ?? 100
+        var rng = SeededGenerator(seed: UInt64(options["seed"].flatMap(Int.init) ?? 42))
+        guard let album = LibraryScanner.album(named: albumName) else { print("ERROR: album \(albumName) not found"); exit(1) }
+        // 1. clear
+        let existing = PHAsset.fetchAssets(in: album, options: nil)
+        if existing.count > 0 {
+            try? await PHPhotoLibrary.shared().performChanges { PHAssetCollectionChangeRequest(for: album)?.removeAssets(existing) }
+            print("Cleared \(existing.count) asset(s) from \"\(albumName)\".")
+        }
+        // 2. candidates
+        let scanner = LibraryScanner()
+        var pool = scanner.fetchEligibleAssets().filter { a in
+            a.sourceType == .typeUserLibrary && !a.hasAdjustments && !LibraryScanner.isHDRGainMap(a)
+                && !a.mediaSubtypes.contains(.photoDepthEffect) && a.pixelWidth >= 800 && a.pixelHeight >= 800
+        }
+        pool.shuffle(using: &rng)
+        print("\(pool.count) editable candidates; looking for \(n) with people/animals/buildings...")
+        let rotator = PhotoKitRotator()
+        var picked: [(PHAsset, Int, String)] = []
+        var truth: [String: [String: Any]] = [:]
+        for a in pool {
+            if picked.count >= n { break }
+            guard let cg = await scanner.requestClassificationImage(for: a) else { continue }
+            guard let why = subjectTag(cg) else { continue }
+            let deg = [0, 90, 180, 270].randomElement(using: &rng)!
+            if deg != 0 {
+                do { try await rotator.rotate(assetID: a.localIdentifier, degrees: RotationDegrees(rawValue: deg)!, confidence: 0) }
+                catch { print("  skip \(a.localIdentifier.prefix(8)): rotate failed \(error)"); continue }
+                ledger.append(LedgerEntry(assetLocalIdentifier: a.localIdentifier, degrees: deg, confidence: 0, appliedAt: ISO8601DateFormatter().string(from: Date())))
+            }
+            picked.append((a, deg, why))
+            truth[a.localIdentifier] = ["scrambledCW": deg, "subject": why]
+            print("  [\(picked.count)/\(n)] \(a.localIdentifier.prefix(8)) \(why) scrambled \(deg)°")
+        }
+        try? await PHPhotoLibrary.shared().performChanges { PHAssetCollectionChangeRequest(for: album)?.addAssets(picked.map { $0.0 } as NSFastEnumeration) }
+        let truthURL = AppPaths.supportDirectory.appendingPathComponent("bench-truth.json")
+        try? JSONSerialization.data(withJSONObject: truth, options: [.prettyPrinted, .sortedKeys]).write(to: truthURL)
+        print("Album \"\(albumName)\": \(picked.count) photos, truth at \(truthURL.path)")
+
+    case "bench-score":
+        // Compares net rotation we applied to each bench asset against the
+        // scramble. correct = (scrambled + our corrections) % 360 == 0.
+        let truthURL = AppPaths.supportDirectory.appendingPathComponent("bench-truth.json")
+        guard let d = try? Data(contentsOf: truthURL), let truth = (try? JSONSerialization.jsonObject(with: d)) as? [String: [String: Any]] else { print("no bench-truth.json"); exit(1) }
+        let entries = ledger.load()
+        var acted = 0, correct = 0, wrong = 0, missed = 0, untouchedOK = 0
+        var wrongList: [String] = []
+        for (id, t) in truth.sorted(by: { $0.key < $1.key }) {
+            let scr = t["scrambledCW"] as? Int ?? 0
+            let ours = entries.filter { $0.assetLocalIdentifier == id }
+            let fixes = ours.filter { $0.confidence > 0 }        // apply-made entries (bench scramble has confidence 0)
+            let net = (scr + fixes.reduce(0) { $0 + $1.degrees }) % 360
+            if fixes.isEmpty { if scr == 0 { untouchedOK += 1 } else { missed += 1 } ; continue }
+            acted += 1
+            if net == 0 { correct += 1 } else { wrong += 1; wrongList.append("\(id.prefix(8)) scrambled \(scr) fixes \(fixes.map { $0.degrees }) net \(net)") }
+        }
+        let n = truth.count
+        print("bench: n=\(n) acted=\(acted) correct=\(correct) wrong=\(wrong) missed(skipped-but-needed)=\(missed) untouched-correct=\(untouchedOK)")
+        print(String(format: "precision (of actions) = %.4f   pass criterion >= 0.99 : %@", acted > 0 ? Double(correct)/Double(acted) : 0, (acted > 0 && Double(correct)/Double(acted) >= 0.99) ? "PASS" : "FAIL"))
+        print(String(format: "recall (needed fixes made) = %.4f", (missed + correct + wrong) > 0 ? Double(correct)/Double(missed + correct + wrong) : 0))
+        for w in wrongList { print("  WRONG: \(w)") }
+
     case "scan":
         guard await PhotoKitRotator.requestAuthorization() else {
             print("ERROR: Photos access not authorized. Grant access in System Settings > Privacy & Security > Photos.")
@@ -194,7 +264,7 @@ func run() async {
         }
         let limit = options["limit"].flatMap { Int($0) }
         let modelPath = options["model"].map { URL(fileURLWithPath: $0) } ?? defaultModelURL()
-        await runScan(limit: limit, modelURL: modelPath, ledger: ledger, writeReport: true)
+        await runScan(limit: limit, modelURL: modelPath, ledger: ledger, writeReport: true, album: options["album"].flatMap(LibraryScanner.album(named:)))
 
     case "apply":
         guard await PhotoKitRotator.requestAuthorization() else {
@@ -205,7 +275,7 @@ func run() async {
         let minConfidence = options["min-confidence"].flatMap { Double($0) } ?? 0.99
         let modelPath = options["model"].map { URL(fileURLWithPath: $0) } ?? defaultModelURL()
         let autoYes = flags.contains("yes")
-        await runApply(limit: limit, minConfidence: minConfidence, modelURL: modelPath, ledger: ledger, autoYes: autoYes)
+        await runApply(limit: limit, minConfidence: minConfidence, modelURL: modelPath, ledger: ledger, autoYes: autoYes, album: options["album"].flatMap(LibraryScanner.album(named:)))
 
     case "revert-all":
         let entries = ledger.load()
@@ -244,7 +314,7 @@ func run() async {
     }
 }
 
-func classifyLibrary(limit: Int?, modelURL: URL) async -> [ClassificationResult] {
+func classifyLibrary(limit: Int?, modelURL: URL, album: PHAssetCollection? = nil) async -> [ClassificationResult] {
     let scanner = LibraryScanner()
     let visionClassifier = VisionOrientationClassifier()
     let coreMLClassifier = CoreMLOrientationClassifier(modelURL: modelURL)
@@ -254,7 +324,7 @@ func classifyLibrary(limit: Int?, modelURL: URL) async -> [ClassificationResult]
         print("WARNING: CoreML model not found at \(modelURL.path). Falling back to Vision-only heuristic, which will skip almost everything by design. See docs/DESIGN.md.")
     }
 
-    let assets = scanner.fetchEligibleAssets(limit: limit)
+    let assets = scanner.fetchEligibleAssets(limit: limit, inAlbum: album)
     print("Found \(assets.count) eligible photo(s) (videos, Live Photos, panoramas, screenshots excluded).")
 
     var results: [ClassificationResult] = []
@@ -287,8 +357,8 @@ func classifyLibrary(limit: Int?, modelURL: URL) async -> [ClassificationResult]
     return results
 }
 
-func runScan(limit: Int?, modelURL: URL, ledger: Ledger, writeReport: Bool) async {
-    let results = await classifyLibrary(limit: limit, modelURL: modelURL)
+func runScan(limit: Int?, modelURL: URL, ledger: Ledger, writeReport: Bool, album: PHAssetCollection? = nil) async {
+    let results = await classifyLibrary(limit: limit, modelURL: modelURL, album: album)
     let needsRotation = results.filter { $0.needsRotation }
     print("\nScan complete. \(needsRotation.count)/\(results.count) photo(s) would be rotated at the default 0.99 confidence threshold.")
     for r in needsRotation.prefix(20) {
@@ -311,8 +381,8 @@ func runScan(limit: Int?, modelURL: URL, ledger: Ledger, writeReport: Bool) asyn
     }
 }
 
-func runApply(limit: Int?, minConfidence: Double, modelURL: URL, ledger: Ledger, autoYes: Bool) async {
-    let results = await classifyLibrary(limit: limit, modelURL: modelURL)
+func runApply(limit: Int?, minConfidence: Double, modelURL: URL, ledger: Ledger, autoYes: Bool, album: PHAssetCollection? = nil) async {
+    let results = await classifyLibrary(limit: limit, modelURL: modelURL, album: album)
     let toRotate = results.filter { $0.needsRotation && $0.confidence >= minConfidence }
     guard !toRotate.isEmpty else {
         print("\nNo photos met the \(minConfidence) confidence threshold. Nothing changed.")
@@ -361,4 +431,33 @@ func rotateCGImage(_ cg: CGImage, cwDegrees: Int) -> CGImage? {
     ctx.rotate(by: -CGFloat(k) * .pi / 2)
     ctx.draw(cg, in: CGRect(x: -CGFloat(cg.width) / 2, y: -CGFloat(cg.height) / 2, width: CGFloat(cg.width), height: CGFloat(cg.height)))
     return ctx.makeImage()
+}
+
+
+/// Deterministic RNG so bench runs are reproducible.
+struct SeededGenerator: RandomNumberGenerator {
+    var state: UInt64
+    init(seed: UInt64) { state = seed &* 0x9E3779B97F4A7C15 | 1 }
+    mutating func next() -> UInt64 { state ^= state << 13; state ^= state >> 7; state ^= state << 17; return state }
+}
+
+/// Returns a short tag if the image clearly contains a person, an animal, or a
+/// building/structure (Vision), else nil. Used to pick unambiguous bench photos.
+func subjectTag(_ cg: CGImage) -> String? {
+    let faces = VNDetectFaceRectanglesRequest()
+    let humans = VNDetectHumanRectanglesRequest()
+    let animals = VNRecognizeAnimalsRequest()
+    let scene = VNClassifyImageRequest()
+    let h = VNImageRequestHandler(cgImage: cg, options: [:])
+    try? h.perform([faces, humans, animals, scene])
+    if let f = faces.results, f.contains(where: { $0.confidence > 0.9 }) { return "face" }
+    if let hu = humans.results, hu.contains(where: { $0.confidence > 0.9 }) { return "person" }
+    if let an = animals.results, an.contains(where: { $0.confidence > 0.8 }) { return "animal" }
+    let buildingWords = ["building", "house", "church", "skyscraper", "castle", "architecture", "tower", "bridge", "cityscape", "street", "temple", "cathedral", "barn", "lighthouse", "stadium"]
+    if let obs = scene.results {
+        for o in obs where o.confidence > 0.6 {
+            if buildingWords.contains(where: { o.identifier.lowercased().contains($0) }) { return "building:" + o.identifier }
+        }
+    }
+    return nil
 }
