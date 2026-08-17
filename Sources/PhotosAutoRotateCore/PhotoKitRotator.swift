@@ -86,32 +86,32 @@ public final class PhotoKitRotator {
         // edit that drops the gain map (PHPhotosError 3302), so rotate the gain
         // map alongside the base image and write it back.
         let gainMap = CIImage(contentsOf: sourceURL, options: [.auxiliaryHDRGainMap: true])
-        let steps = ProcessInfo.processInfo.environment["PAR_NOROT"] != nil ? 0 : degrees.rawValue / 90
+        let steps = degrees.rawValue / 90
         func orient(_ img: CIImage) -> CIImage {
             var out = img.oriented(baseOrientation)
             for _ in 0..<steps { out = out.oriented(.right) }
             return out
         }
-        let rotated = orient(ci)
-        let rotatedGain = gainMap.map(orient)
+        // CIImage carries the source metadata (incl. EXIF Orientation=6 for
+        // portrait iPhone shots) into the written file even though the pixels
+        // are already upright; photolibraryd's mutation validator rejects that
+        // mismatch with PHPhotosError 3302. Force Orientation=1 (and drop the
+        // TIFF/EXIF orientation duplicates).
+        func upright(_ img: CIImage) -> CIImage {
+            var props = img.properties
+            props[kCGImagePropertyOrientation as String] = 1
+            if var tiff = props[kCGImagePropertyTIFFDictionary as String] as? [String: Any] { tiff[kCGImagePropertyTIFFOrientation as String] = 1; props[kCGImagePropertyTIFFDictionary as String] = tiff }
+            return img.settingProperties(props)
+        }
+        let rotated = upright(orient(ci))
+        let rotatedGain = gainMap.map { upright(orient($0)) }
 
         let output = PHContentEditingOutput(contentEditingInput: input)
-        if ProcessInfo.processInfo.environment["PAR_DEBUG"] != nil {
-            FileHandle.standardError.write("gainMap=\(gainMap != nil) defaultRenderedContentType=\(String(describing: output.defaultRenderedContentType)) inputAdj=\(String(describing: input.adjustmentData?.formatIdentifier))\n".data(using: .utf8)!)
-        }
         let ctx = CIContext()
         guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB) else { throw RotatorError.noEditingInput }
         var opts: [CIImageRepresentationOption: Any] = [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.95]
         if let rotatedGain { opts[.hdrGainMapImage] = rotatedGain }
-        if ProcessInfo.processInfo.environment["PAR_IDENTITY"] != nil {
-            try FileManager.default.copyItem(at: sourceURL, to: output.renderedContentURL)   // experiment: identity edit
-        } else if ProcessInfo.processInfo.environment["PAR_HEIC"] != nil, let heic = UTType.heic as UTType?, output.supportedRenderedContentTypes.contains(heic) {
-            let url = try output.renderedContentURL(for: heic)
-            try ctx.writeHEIFRepresentation(of: rotated, to: url, format: .RGBA8, colorSpace: colorSpace, options: opts)
-            FileHandle.standardError.write("wrote HEIC to \(url.path)\n".data(using: .utf8)!)
-        } else {
-            try ctx.writeJPEGRepresentation(of: rotated, to: output.renderedContentURL, colorSpace: colorSpace, options: opts)
-        }
+        try ctx.writeJPEGRepresentation(of: rotated, to: output.renderedContentURL, colorSpace: colorSpace, options: opts)
         if ProcessInfo.processInfo.environment["PAR_DEBUG"] != nil {
             let sz = (try? FileManager.default.attributesOfItem(atPath: output.renderedContentURL.path)[.size]) ?? 0
             FileHandle.standardError.write("src=\(sourceURL.path) orient=\(input.fullSizeImageOrientation) extent=\(rotated.extent) out=\(output.renderedContentURL.path) bytes=\(sz)\n".data(using: .utf8)!)
@@ -120,10 +120,8 @@ public final class PhotoKitRotator {
         let payload = AutoRotateAdjustment(degrees: degrees.rawValue, confidence: confidence, appliedAt: ISO8601DateFormatter().string(from: Date()))
         let data = try JSONEncoder().encode(payload)
         output.adjustmentData = PHAdjustmentData(formatIdentifier: AutoRotateAdjustment.formatIdentifier,
-                                                  formatVersion: AutoRotateAdjustment.formatVersion,
-                                                  data: data)
+                                                  formatVersion: AutoRotateAdjustment.formatVersion, data: data)
 
-        if let w = ProcessInfo.processInfo.environment["PAR_WAIT"].flatMap(Double.init) { try? await Task.sleep(nanoseconds: UInt64(w * 1e9)) }
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             PHPhotoLibrary.shared().performChanges({
                 let req = PHAssetChangeRequest(for: asset)

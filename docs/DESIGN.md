@@ -44,16 +44,19 @@ random known rotation; `apply --album ...` runs the real pipeline;
 `bench-score` compares. 2026-08-17: n=100, acted 59, correct 59, wrong 0
 (precision 1.000), 10 skipped-but-needed (recall 0.855). PASS.
 
-## OPEN: HDR gain-map photos can't be edited via PhotoKit (3302)
-Assets with ZHDRTYPE=10 / undocumented mediaSubtypes bit 1<<9 (~3,200 of
-Daniel's 17k photos, iPhone "ISO HDR" JPEG/HEIC) fail `performChanges` with
-PHPhotosError 3302 "asset resource validation failed" for ANY third-party
-contentEditingOutput -- identity copy, JPEG, HEIC, with or without the gain
-map carried (`.auxiliaryHDRGainMap` -> `.hdrGainMapImage`), bundled or not,
-original local or not. Non-HDR assets (cloud-only originals included) commit
-fine. Photos.app's own Image > Rotate works on them (and drops their type-14
-v3 internal resource). `apply` reports these as FAILED; no workaround yet
-that doesn't involve driving Photos.app.
+## SOLVED: PHPhotosError 3302 on portrait/HDR photos
+Third-party edits on any asset whose original carries EXIF Orientation != 1
+(all portrait iPhone shots; also correlated with HDR/cloud-only, which were
+red herrings) failed `performChanges` with 3302 "asset resource validation
+failed". Root cause (found by disassembling Photos.framework
+`-[PHAssetChangeRequest _validateImageURLForAssetMutation:error:]`): the
+validator reads the rendered file's image properties and rejects an EXIF
+Orientation that disagrees with the pixels. CIImage copies the source EXIF
+(6) into the rendered JPEG even after `.oriented()` bakes the pixels upright.
+Fix: `settingProperties` with Orientation=1 (and TIFF orientation) before
+writing; also carry the HDR gain map (`.auxiliaryHDRGainMap` ->
+`.hdrGainMapImage`) so ISO-HDR photos keep their HDR. Verified on 2397C7F3,
+D5DF0560 (HDR+portrait), 2EA8B0F4, 3FF89480.
 
 ## Gotchas
 * `MLModel(contentsOf:)` needs .mlmodelc — we compile the .mlpackage at
