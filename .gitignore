@@ -5,3 +5,4 @@ models/*.onnx
 models/*.mlmodelc
 models/src_repo/
 .DS_Store
+dist/

@@ -10,6 +10,11 @@ let package = Package(
             dependencies: ["PhotosAutoRotateCore"],
             path: "Sources/PhotosAutoRotate"
         ),
+        .executableTarget(
+            name: "PhotosAutoRotateApp",
+            dependencies: ["PhotosAutoRotateCore"],
+            path: "Sources/PhotosAutoRotateApp"
+        ),
         .target(
             name: "PhotosAutoRotateCore",
             path: "Sources/PhotosAutoRotateCore"
