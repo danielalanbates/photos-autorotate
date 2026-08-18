@@ -211,7 +211,13 @@ func run() async {
         let albumName = options["album"] ?? "AutoRotate Review"
         let n = options["n"].flatMap(Int.init) ?? 100
         var rng = SeededGenerator(seed: UInt64(options["seed"].flatMap(Int.init) ?? 42))
-        guard let album = LibraryScanner.album(named: albumName) else { print("ERROR: album \(albumName) not found"); exit(1) }
+        var albumOpt = LibraryScanner.album(named: albumName)
+        if albumOpt == nil {
+            var ph: PHObjectPlaceholder?
+            try? await PHPhotoLibrary.shared().performChanges { ph = PHAssetCollectionChangeRequest.creationRequestForAssetCollection(withTitle: albumName).placeholderForCreatedAssetCollection }
+            if let id = ph?.localIdentifier { albumOpt = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [id], options: nil).firstObject }
+        }
+        guard let album = albumOpt else { print("ERROR: could not find/create album \(albumName)"); exit(1) }
         // 1. clear
         let existing = PHAsset.fetchAssets(in: album, options: nil)
         let append = flags.contains("append")
@@ -238,7 +244,7 @@ func run() async {
             if picked.count + already.count >= n { break }
             guard let cg = await scanner.requestClassificationImage(for: a) else { continue }
             guard let why = subjectTag(cg) else { continue }
-            let deg = [0, 90, 180, 270].randomElement(using: &rng)!
+            let deg = (flags.contains("all-rotated") ? [90, 180, 270] : [0, 90, 180, 270]).randomElement(using: &rng)!
             if deg != 0 {
                 do { try await rotator.rotate(assetID: a.localIdentifier, degrees: RotationDegrees(rawValue: deg)!, confidence: 0) }
                 catch { print("  skip \(a.localIdentifier.prefix(8)): rotate failed \(error)"); continue }
