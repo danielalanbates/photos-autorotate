@@ -110,6 +110,13 @@ func run() async {
             let (vs, sig) = vis.classify(cgImage: cg)
             let vg = vis.bestGuess(from: vs)
             print("  vision: rotate \(vg.rotation.rawValue)° conf \(String(format: "%.2f", vg.confidence)) signals=\(sig) scores=\(vs.map { "\($0.rotation.rawValue):\(String(format: "%.1f", $0.score))" })")
+            if flags.contains("raw"), let bURL = options["model-b"].map({ URL(fileURLWithPath: $0) }) {
+                let b = CoreMLOrientationClassifier(modelURL: bURL, imageSize: 224, calibrationCeiling: 1.0)
+                let ra = clf.rawViews(cgImage: cg).map { "[\($0.0),\(String(format: "%.4f", $0.1))]" }.joined(separator: ",")
+                let rb = b.rawViews(cgImage: cg).map { "[\($0.0),\(String(format: "%.4f", $0.1))]" }.joined(separator: ",")
+                print("RAW\t\(path)\t[\(ra)]\t[\(rb)]")
+                continue
+            }
             if let bURL = options["model-b"].map({ URL(fileURLWithPath: $0) }) {
                 let b = CoreMLOrientationClassifier(modelURL: bURL, imageSize: 224, calibrationCeiling: 1.0, classToCW: (options["b-map"] ?? "0,1,2,3").split(separator: ",").map { Int($0)! })
                 var bv: [String] = []

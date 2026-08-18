@@ -67,6 +67,17 @@ public final class CoreMLOrientationClassifier {
     /// image is ambiguous and we return nil (=> skip). Otherwise return a
     /// 4-vector whose winning entry is the MIN calibrated probability across
     /// the four views (the weakest link), the rest split evenly.
+    /// All 8 views' (aligned correction class, raw top prob) for offline analysis.
+    public func rawViews(cgImage: CGImage) -> [(Int, Double)] {
+        var out: [(Int, Double)] = []
+        for flip in [false, true] { for k in 0..<4 {
+            guard let probs = classify(cgImage: cgImage, preRotateCWQuarterTurns: k, mirrored: flip), probs.count == 4 else { out.append((-1, 0)); continue }
+            let cRaw = probs.indices.max { probs[$0] < probs[$1] }!; let c = classToCW[cRaw]
+            out.append((flip ? ((k - c) % 4 + 4) % 4 : (c + k) % 4, probs[cRaw]))
+        } }
+        return out
+    }
+
     public func classifyConsensus(cgImage: CGImage, useFlips: Bool = true) -> [Double]? {
         var aligned: Int? = nil
         var minP = 1.0

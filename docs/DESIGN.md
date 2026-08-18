@@ -50,6 +50,15 @@ about; fixing them needs a second, independent model (ensemble), not a
 looser gate. Vision face/text heuristic tried as that second signal: worse
 than useless (vetoes correct calls) -> disabled.
 
+## Recall ceiling with the available models (raw 16-view sweep, 1,600 trials)
+scripts/bench_raw.py dumps every view (A x8, B x8). Sweeping agreement rules
+(8/8, 7/8, 6/8 per model; A/B floors 0.75-0.95) keeps 0 wrong everywhere but
+recall only moves 0.825 -> 0.835. The remaining ~16% of misoriented photos are
+ones where neither model reaches a stable answer (91/296 skipped: no consensus
+from either; the rest: low, non-agreeing confidence). Pushing further needs a
+third/better model trained for the purpose -- not feasible on this 8GB Mac --
+or accepting errors, which the 99% rule forbids.
+
 ## Live album bench (Daniel's pass/fail metric)
 `bench-setup --album "AutoRotate Review" --n 100 [--append]` picks editable
 people/animal/building photos, adds them to the album, scrambles each by a
