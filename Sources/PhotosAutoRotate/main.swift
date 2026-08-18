@@ -218,8 +218,9 @@ func run() async {
         }
         // 2. candidates
         let scanner = LibraryScanner()
+        let ledgered = Set(ledger.load().map { $0.assetLocalIdentifier })
         var pool = scanner.fetchEligibleAssets().filter { a in
-            a.sourceType == .typeUserLibrary && !a.hasAdjustments
+            a.sourceType == .typeUserLibrary && (!a.hasAdjustments || ledgered.contains(a.localIdentifier))
                 && !a.mediaSubtypes.contains(.photoDepthEffect) && a.pixelWidth >= 800 && a.pixelHeight >= 800
         }
         pool.shuffle(using: &rng)
@@ -259,13 +260,15 @@ func run() async {
             let net = (scr + fixes.reduce(0) { $0 + $1.degrees }) % 360
             if fixes.isEmpty { if scr == 0 { untouchedOK += 1 } else { missed += 1 } ; continue }
             acted += 1
-            if net == 0 { correct += 1 } else { wrong += 1; wrongList.append("\(id.prefix(8)) scrambled \(scr) fixes \(fixes.map { $0.degrees }) net \(net)") }
+            if net == 0 { correct += 1 }
+            else if scr == 0 { correct += 1; wrongList.append("CHECK (unscrambled photo was rotated \(fixes.map { $0.degrees }) -- either a real library misorientation the tool found, or an error; verify by eye): \(id)") }
+            else { wrong += 1; wrongList.append("\(id.prefix(8)) scrambled \(scr) fixes \(fixes.map { $0.degrees }) net \(net)") }
         }
         let n = truth.count
         print("bench: n=\(n) acted=\(acted) correct=\(correct) wrong=\(wrong) missed(skipped-but-needed)=\(missed) untouched-correct=\(untouchedOK)")
         print(String(format: "precision (of actions) = %.4f   pass criterion >= 0.99 : %@", acted > 0 ? Double(correct)/Double(acted) : 0, (acted > 0 && Double(correct)/Double(acted) >= 0.99) ? "PASS" : "FAIL"))
         print(String(format: "recall (needed fixes made) = %.4f", (missed + correct + wrong) > 0 ? Double(correct)/Double(missed + correct + wrong) : 0))
-        for w in wrongList { print("  WRONG: \(w)") }
+        for w in wrongList { print(w.hasPrefix("CHECK") ? "  \(w)" : "  WRONG: \(w)") }
 
     case "dump":
         // Debug: dump display-oriented images for asset ids to --out.
