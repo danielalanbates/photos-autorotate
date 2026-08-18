@@ -10,6 +10,7 @@ swift build -c release --product PhotosAutoRotateApp
 rm -rf "$OUT"; mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/PhotosAutoRotateApp "$APP/Contents/MacOS/PhotosAutoRotate"
 cp -R models/OrientationClassifier.mlpackage models/OrientationClassifierB.mlpackage "$APP/Contents/Resources/"
+cp assets/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -18,6 +19,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <key>CFBundleName</key><string>Photos AutoRotate</string>
 <key>CFBundleDisplayName</key><string>Photos AutoRotate</string>
 <key>CFBundleExecutable</key><string>PhotosAutoRotate</string>
+<key>CFBundleIconFile</key><string>AppIcon</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleVersion</key><string>$VERSION</string>
 <key>CFBundleShortVersionString</key><string>$VERSION</string>
