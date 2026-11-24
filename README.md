@@ -4,7 +4,7 @@ Finds sideways / upside-down photos in your Apple Photos library and fixes them 
 **only when it is ≥99% certain**. Every fix is a normal, revertible Photos edit
 (Photos ▸ Revert to Original, or the app's "Revert everything" button).
 
-**Download:** [latest release DMG](../../releases/latest) · macOS 14+, Apple Silicon or Intel · notarized.
+**Download:** [latest release DMG](../../releases/latest) · macOS 14+, Apple Silicon or Intel.
 
 ## How it works
 - Two independent CoreML orientation models (EfficientNetV2-S from
